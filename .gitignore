@@ -1,0 +1,12 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Datasets
+/data/cifar-10-batches-py/
+/data/cifar-100-python/
+*.tar.gz
+
+# Results
+/results/
+plots/
