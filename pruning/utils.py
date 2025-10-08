@@ -11,7 +11,7 @@ def get_execution_order(model):
         if len(list(module.children())) == 0: 
             hooks.append(module.register_forward_hook(hook_fn))
     device = next(model.parameters()).device
-    dummy = torch.randn(1, 3, 224, 224).to(device)
+    dummy = torch.randn(1, 3, 32, 32).to(device)
     _ = model(dummy)
 
     for h in hooks:

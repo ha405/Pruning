@@ -4,12 +4,12 @@ import torch.nn as nn
 import pandas as pd
 import matplotlib.pyplot as plt
 import json
-from models.vgg_16_bn import get_model
+from models.vgg_16_bn import get_model, get_model_100
 from pruning.utils import get_execution_order, evaluate_accuracy
 from profiling import profile_model
 
 
-def run_sensitivity_analysis(model, testloader, device, dataset_name="cifar10", save_path="sensitivity_layerwise.csv"):
+def run_sensitivity_analysis(model, testloader, device, dataset_name="cifar10", save_path="sensitivity_layerwise.csv", cifar100 = False):
     model = model.to(device)
     forward_order = get_execution_order(model)
     # Only Conv2d and Linear layers can be pruned
@@ -22,7 +22,10 @@ def run_sensitivity_analysis(model, testloader, device, dataset_name="cifar10", 
     for layer in to_prune:
         layer_name = layer.__class__.__name__
         for sparse in sparsity_levels:
-            pruned_model = get_model().to(device)
+            if cifar100:
+                pruned_model = get_model_100().to(device)
+            else:
+                pruned_model = get_model().to(device)
             pruned_model.load_state_dict(model.state_dict())
 
             target_layer = None
@@ -81,7 +84,7 @@ def analyze_sensitivity(csv_path, dataset_name, model, target_sparsity=0.8, plot
     for layer, group in df.groupby("layer"):
         if any(bn in layer.lower() for bn in ["bn", "batchnorm"]):
             continue
-        tolerable = group[group["top1_drop"] <= 2.0]
+        tolerable = group[group["top1_drop"] <= 20]
         best_sparse = tolerable["sparsity_pct"].max() if len(tolerable) > 0 else 20
         n_params = sum(x[1] for x in param_map.get(layer, []))
         weighted_sum += n_params * (best_sparse / 100.0)
@@ -180,33 +183,68 @@ def finetune_pruned_model(model, trainloader, val_loader, masks, device="cpu",
     criterion = nn.CrossEntropyLoss()
     best_acc = 0
     best_state = None
-
+    print("⚙️ Starting fine-tuning...")
     for epoch in range(epochs):
+        print(f"\n=== Epoch {epoch+1}/{epochs} started ===")
         model.train()
-        for inputs, targets in trainloader:
-            inputs, targets = inputs.to(device), targets.to(device)
+        epoch_loss = 0
+        batch_count = 0
+
+        for batch_idx, (inputs, targets) in enumerate(trainloader):
+            batch_count += 1
+            try:
+                inputs, targets = inputs.to(device), targets.to(device)
+            except Exception as e:
+                print(f"[ERROR] Moving batch to device failed at batch {batch_idx}: {e}")
+                continue
+
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            optimizer.step()
+            try:
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
+            except Exception as e:
+                print(f"[ERROR] Forward/backward/step failed at batch {batch_idx}: {e}")
+                continue
+
             # Re-apply masks
+            param_dict = dict(model.named_parameters())
             with torch.no_grad():
                 for name, mask in masks.items():
-                    param = dict(model.named_parameters())[name]
-                    param.data *= mask
+                    if name in param_dict:
+                        param_dict[name].data.mul_(mask)
+                    else:
+                        print(f"[WARNING] Mask for {name} not found in model params.")
 
-        val_acc = evaluate_accuracy(model, val_loader, device)
+            epoch_loss += loss.item()
+
+            # Print every 50 batches
+            if batch_idx % 50 == 0:
+                print(f"Epoch {epoch+1} Batch {batch_idx}/{len(trainloader)} -> Loss: {loss.item():.4f}")
+
+        avg_loss = epoch_loss / batch_count if batch_count > 0 else float('nan')
+        print(f"Epoch {epoch+1} finished. Avg Loss: {avg_loss:.4f}, Batches: {batch_count}")
+
+        # Validation
+        model.eval()
+        try:
+            val_acc = evaluate_accuracy(model, val_loader, device)
+        except Exception as e:
+            print(f"[ERROR] Validation failed at epoch {epoch+1}: {e}")
+            val_acc = 0.0
+
+        print(f"Epoch {epoch+1}/{epochs} -> Val Acc: {val_acc:.2f}%")
         if val_acc > best_acc:
             best_acc = val_acc
             best_state = model.state_dict()
-        print(f"Epoch {epoch+1}/{epochs} -> Val Acc: {val_acc:.2f}%")
 
-    if save_path:
+    if save_path and best_state is not None:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         torch.save(best_state, save_path)
         print(f"Finetuned model saved to {save_path}")
 
+    print(f"Best validation accuracy achieved: {best_acc:.2f}%")
     return best_acc
 
 

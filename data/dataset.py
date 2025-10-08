@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 mean, std = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
 
 Transform = transforms.Compose([
-    transforms.Resize((224, 224)),      
+    transforms.Resize((32, 32)),      
     transforms.ToTensor(),              
     transforms.Normalize(mean=mean, std=std)
 ])

@@ -22,10 +22,18 @@ def get_model_size_mb(model, temp_path="temp_model.pt"):
     return round(size_mb, 3)
 
 
-def get_macs(model, batch_size=1, img_size=224, device="cuda"):
+def get_macs(model, batch_size=1, img_size=None, device="cuda", dataset_name=None):
+    if img_size is None:
+        if dataset_name in ["cifar10", "cifar100", "rmnist"]:
+            img_size = 32
+        elif dataset_name in ["domainnet", "pacs", "officehome"]:
+            img_size = 224
+        else:
+            img_size = 224  
+    
     dummy_input = torch.randn(batch_size, 3, img_size, img_size).to(device)
     macs = profile_macs(model, dummy_input)
-    return round(macs / 1e6, 3)  # in Millions
+    return round(macs / 1e6, 3)
 
 
 def measure_inference_latency(model, dataloader, device, num_batches=10):
@@ -121,7 +129,7 @@ def profile_model(model, dataloader, dataset_name, device="cuda", num_batches=10
     size_mb = get_model_size_mb(model)
 
     # Step 2 — MACs
-    macs_million = get_macs(model, batch_size=1, device=device)
+    macs_million = get_macs(model, batch_size=1, device=device, dataset_name=dataset_name)
 
     # Step 3 — Latency + Memory
     latency_ms, peak_mem_mb, avg_mem_mb = measure_inference_latency(
