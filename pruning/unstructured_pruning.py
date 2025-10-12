@@ -128,11 +128,13 @@ def apply_pruning_masks_sparse(model, sparsity_plan_csv, dataset_name, target_sp
         masks[name] = mask
 
         if W.ndim >= 2:
-            indices = torch.nonzero(W, as_tuple=False).t()  # [ndim, nnz]
-            values = W[tuple(indices[i] for i in range(indices.shape[0]))]
-            shape = W.shape
-            W_sparse = torch.sparse_coo_tensor(indices, values, shape)
-            sparse_weights[name] = W_sparse
+            if W.dim() == 2:
+                sparse_weights[name] = W.to_sparse_csr()
+            else:
+                original_shape = W.shape
+                W_flat_dense = W.reshape(original_shape[0], -1)
+                W_sparse_flat_csr = W_flat_dense.to_sparse_csr()
+                sparse_weights[name] = (W_sparse_flat_csr, original_shape)
 
     mask_path = f"results/pruning_masks/{dataset_name}_unstructured_mask.pt"
     model_path = f"results/models/{dataset_name}_vgg16_unstructured_{int(target_sparsity*100)}.pt"
@@ -149,26 +151,34 @@ def apply_pruning_masks_sparse(model, sparsity_plan_csv, dataset_name, target_sp
     return masks, sparse_weights
 
 
-def verify_masks_coo(mask_path, sparse_path):
+def verify_masks_coo(mask_path: str, sparse_path: str):
     masks = torch.load(mask_path)
     sparse_weights = torch.load(sparse_path)
 
     log = []
     for name in masks:
         mask = masks[name]
-        W_sparse = sparse_weights.get(name)
+        sparse_object = sparse_weights.get(name) 
+        if isinstance(sparse_object, tuple):
+            W_sparse = sparse_object[0]
+        else:
+            W_sparse = sparse_object
         num_params = mask.numel()
         num_zeroed = (mask == 0).sum().item()
-        coo_nnz = W_sparse._nnz() if W_sparse is not None else 0
-        matches = (num_params - num_zeroed) == coo_nnz
-        log.append({"layer": name, "num_params": num_params, "num_zeroed": num_zeroed, "coo_nnz": coo_nnz, "matches": matches})
-
+        sparse_nnz = W_sparse._nnz() if W_sparse is not None else 0
+        matches = (num_params - num_zeroed) == sparse_nnz
+        log.append({
+            "layer": name,
+            "num_params": num_params,
+            "num_zeroed": num_zeroed,
+            "sparse_nnz": sparse_nnz,
+            "matches": matches
+        })
     os.makedirs("results/verification", exist_ok=True)
-    log_path = "results/verification/mask_coo_verification.csv"
+    log_path = "results/verification/mask_csr_verification.csv"
     pd.DataFrame(log).to_csv(log_path, index=False)
     print(f"Verification log saved to {log_path}")
     return log
-
 
 def finetune_pruned_model(model, trainloader, val_loader, masks, device="cpu",
                           optimizer_type="sgd", lr=1e-3, momentum=0.9,
