@@ -84,7 +84,7 @@ def analyze_sensitivity(csv_path, dataset_name, model, target_sparsity=0.8, plot
     for layer, group in df.groupby("layer"):
         if any(bn in layer.lower() for bn in ["bn", "batchnorm"]):
             continue
-        tolerable = group[group["top1_drop"] <= 20]
+        tolerable = group[group["top1_drop"] <= 12]
         best_sparse = tolerable["sparsity_pct"].max() if len(tolerable) > 0 else 20
         n_params = sum(x[1] for x in param_map.get(layer, []))
         weighted_sum += n_params * (best_sparse / 100.0)
